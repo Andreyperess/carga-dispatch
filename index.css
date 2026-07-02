@@ -1,0 +1,21 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #F6F4EF;
+}
+
+/* borda tracejada estilo "canhoto de manifesto" usada nos cards de carga */
+.stub-edge {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    #C9C4B6 0,
+    #C9C4B6 6px,
+    transparent 6px,
+    transparent 14px
+  );
+}
