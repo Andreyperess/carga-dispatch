@@ -36,6 +36,48 @@ function startOfWeek(date) {
   return new Date(d.setDate(diff));
 }
 
+/* ----------------------------------------------------------------------
+   NOTIFICAÇÕES DO NAVEGADOR (estilo WhatsApp Web)
+   Funciona enquanto a aba estiver aberta (pode estar minimizada ou em
+   segundo plano). Se o navegador estiver fechado, não dispara — isso é
+   uma limitação de qualquer sistema web sem push notification via
+   service worker, não é um bug.
+---------------------------------------------------------------------- */
+
+function playNotificationBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.35);
+  } catch {
+    // navegador sem suporte a Web Audio — ignora silenciosamente
+  }
+}
+
+function notifyNewCarga(carga) {
+  playNotificationBeep();
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+
+  const n = new Notification('Nova carga recebida', {
+    body: `Rota ${carga.route_number} — motorista ${carga.driver_name}`,
+    tag: `carga-${carga.id}`,
+    requireInteraction: false,
+  });
+  n.onclick = () => {
+    window.focus();
+    n.close();
+  };
+}
+
 /* ============================================================================
    UI ATOMS
 ============================================================================ */
@@ -340,6 +382,9 @@ function FilaTrabalho({ profile }) {
   const [cargas, setCargas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
+  const [notifPermission, setNotifPermission] = useState(
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -355,11 +400,19 @@ function FilaTrabalho({ profile }) {
 
   useEffect(() => {
     load();
-    // Atualiza a fila em tempo real quando novas cargas chegam
+    // Atualiza a fila em tempo real quando novas cargas chegam.
+    // No INSERT, dispara notificação + som; nos demais eventos, só recarrega.
     const channel = supabase
       .channel('fila-trabalho')
       .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'cargas',
+        event: 'INSERT', schema: 'public', table: 'cargas',
+        filter: `programador_id=eq.${profile.id}`,
+      }, (payload) => {
+        notifyNewCarga(payload.new);
+        load();
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'cargas',
         filter: `programador_id=eq.${profile.id}`,
       }, load)
       .subscribe();
@@ -373,10 +426,31 @@ function FilaTrabalho({ profile }) {
     setBusyId(null);
   }
 
+  async function ativarNotificacoes() {
+    if (!('Notification' in window)) return;
+    const result = await Notification.requestPermission();
+    setNotifPermission(result);
+  }
+
   return (
     <div>
       <p className="font-mono text-xs tracking-widest text-accent">FILA DE TRABALHO</p>
       <h1 className="font-display text-4xl text-asphalt">Cargas Pendentes</h1>
+
+      {notifPermission === 'default' && (
+        <div className="mt-4 flex items-center justify-between rounded-xl border border-accent/30 bg-accent/5 px-4 py-3">
+          <p className="text-sm text-asphalt">Ative as notificações pra saber na hora quando uma carga nova chegar, mesmo com a aba minimizada.</p>
+          <button onClick={ativarNotificacoes}
+            className="ml-4 shrink-0 rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-dark">
+            Ativar notificações
+          </button>
+        </div>
+      )}
+      {notifPermission === 'denied' && (
+        <div className="mt-4 rounded-xl border border-pending/30 bg-pending/5 px-4 py-3">
+          <p className="text-sm text-asphalt">Notificações bloqueadas pelo navegador. Pra ativar, clique no cadeado ao lado da URL e permita notificações pra este site.</p>
+        </div>
+      )}
       <p className="mt-1 text-steel">{cargas.length} carga(s) aguardando seu processamento.</p>
 
       {loading ? <Spinner /> : cargas.length === 0 ? (
