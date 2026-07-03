@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { supabase } from './supabaseClient';
 
 /* ============================================================================
@@ -457,44 +457,44 @@ function FilaTrabalho({ profile }) {
   const [notifPermission, setNotifPermission] = useState(
     typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
   );
+  const idsAnterioresRef = useRef(null); // null = ainda não carregou a 1ª vez
 
   const load = useCallback(async () => {
-    setLoading(true);
     const { data } = await supabase
       .from('cargas')
       .select('*')
       .eq('programador_id', profile.id)
       .eq('status', 'pendente')
       .order('created_at', { ascending: true });
-    setCargas(data || []);
+    const novaLista = data || [];
+
+    // Compara com a busca anterior pra descobrir o que chegou de novo.
+    // Na primeira carga da página (idsAnterioresRef ainda null) não notifica
+    // nada, só registra o ponto de partida.
+    if (idsAnterioresRef.current) {
+      novaLista
+        .filter((c) => !idsAnterioresRef.current.has(c.id))
+        .forEach(notifyNewCarga);
+    }
+    idsAnterioresRef.current = new Set(novaLista.map((c) => c.id));
+
+    setCargas(novaLista);
     setLoading(false);
   }, [profile.id]);
 
   useEffect(() => {
     load();
-    // Atualiza a fila em tempo real quando novas cargas chegam.
-    // No INSERT, dispara notificação + som; nos demais eventos, só recarrega.
-    const channel = supabase
-      .channel('fila-trabalho')
-      .on('postgres_changes', {
-        event: 'INSERT', schema: 'public', table: 'cargas',
-        filter: `programador_id=eq.${profile.id}`,
-      }, (payload) => {
-        notifyNewCarga(payload.new);
-        load();
-      })
-      .on('postgres_changes', {
-        event: 'UPDATE', schema: 'public', table: 'cargas',
-        filter: `programador_id=eq.${profile.id}`,
-      }, load)
-      .subscribe();
-    return () => supabase.removeChannel(channel);
-  }, [load, profile.id]);
+    // Sem Realtime (o proxy da Vercel não sustenta WebSocket): verifica se
+    // chegou carga nova a cada 15 segundos.
+    const interval = setInterval(load, 15000);
+    return () => clearInterval(interval);
+  }, [load]);
 
   async function concluir(id) {
     setBusyId(id);
     await supabase.from('cargas').update({ status: 'concluida' }).eq('id', id);
     setCargas((prev) => prev.filter((c) => c.id !== id));
+    idsAnterioresRef.current?.delete(id);
     setBusyId(null);
   }
 
@@ -563,7 +563,6 @@ function AcompanhamentoPassador({ profile }) {
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    setLoading(true);
     const { data } = await supabase
       .from('cargas')
       .select('*, programador:programador_id(full_name)')
@@ -575,15 +574,11 @@ function AcompanhamentoPassador({ profile }) {
 
   useEffect(() => {
     load();
-    const channel = supabase
-      .channel('acompanhamento-passador')
-      .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'cargas',
-        filter: `passador_id=eq.${profile.id}`,
-      }, load)
-      .subscribe();
-    return () => supabase.removeChannel(channel);
-  }, [load, profile.id]);
+    // Sem Realtime (o proxy da Vercel não sustenta WebSocket): atualiza o
+    // status das cargas enviadas a cada 15 segundos.
+    const interval = setInterval(load, 15000);
+    return () => clearInterval(interval);
+  }, [load]);
 
   return (
     <div>
