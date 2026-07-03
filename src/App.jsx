@@ -36,6 +36,13 @@ function startOfWeek(date) {
   return new Date(d.setDate(diff));
 }
 
+function todayISODate() {
+  const d = new Date();
+  const offset = d.getTimezoneOffset();
+  const local = new Date(d.getTime() - offset * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
 /* ----------------------------------------------------------------------
    NOTIFICAÇÕES DO NAVEGADOR (estilo WhatsApp Web)
    Funciona enquanto a aba estiver aberta (pode estar minimizada ou em
@@ -152,9 +159,74 @@ function CargaCard({ carga, children }) {
   );
 }
 
-/* ============================================================================
-   TELA DE LOGIN
-============================================================================ */
+/* Modal com todos os detalhes de uma carga — usado no Histórico e no Relatório */
+function CargaDetailModal({ carga, onClose }) {
+  if (!carga) return null;
+  return (
+    <div className="fixed inset-0 z-20 flex items-center justify-center bg-asphalt/50 px-4" onClick={onClose}>
+      <div
+        className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between border-b border-border px-6 py-4">
+          <div>
+            <p className="font-mono text-xs tracking-wide text-steel">ROTA</p>
+            <p className="font-display text-3xl leading-none text-asphalt">{carga.route_number}</p>
+          </div>
+          <button onClick={onClose} className="text-steel hover:text-asphalt">✕</button>
+        </div>
+
+        <div className="max-h-[70vh] space-y-4 overflow-y-auto px-6 py-5">
+          <div className="flex items-center justify-between">
+            <StatusBadge status={carga.status} />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <p className="text-steel">Motorista</p>
+              <p className="font-medium text-asphalt">{carga.driver_name}</p>
+            </div>
+            <div>
+              <p className="text-steel">Data de carregamento</p>
+              <p className="font-medium text-asphalt">{formatDate(carga.load_date)}</p>
+            </div>
+            <div>
+              <p className="text-steel">Passador</p>
+              <p className="font-medium text-asphalt">{carga.passador?.full_name ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-steel">Programador</p>
+              <p className="font-medium text-asphalt">{carga.programador?.full_name ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-steel">Enviada em</p>
+              <p className="font-medium text-asphalt">{formatDateTime(carga.created_at)}</p>
+            </div>
+            <div>
+              <p className="text-steel">Concluída em</p>
+              <p className="font-medium text-asphalt">{formatDateTime(carga.completed_at)}</p>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-sm text-steel">Agendamento</p>
+            <p className="mt-0.5 text-sm font-medium text-asphalt">
+              {carga.has_schedule ? formatDateTime(carga.schedule_at) : 'Sem agendamento'}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-sm text-steel">Observações</p>
+            <p className="mt-0.5 rounded-lg bg-paper px-3 py-2 text-sm text-asphalt/80">
+              {carga.observations || 'Nenhuma observação.'}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function AuthScreen() {
   const [email, setEmail] = useState('');
@@ -451,6 +523,14 @@ function FilaTrabalho({ profile }) {
           <p className="text-sm text-asphalt">Notificações bloqueadas pelo navegador. Pra ativar, clique no cadeado ao lado da URL e permita notificações pra este site.</p>
         </div>
       )}
+      {notifPermission === 'granted' && (
+        <button
+          onClick={() => notifyNewCarga({ id: 'teste', route_number: '000', driver_name: 'Teste' })}
+          className="mt-3 text-xs font-medium text-steel underline hover:text-accent"
+        >
+          Testar notificação agora
+        </button>
+      )}
       <p className="mt-1 text-steel">{cargas.length} carga(s) aguardando seu processamento.</p>
 
       {loading ? <Spinner /> : cargas.length === 0 ? (
@@ -551,6 +631,8 @@ function HistoricoProgramador({ profile }) {
   const [cargas, setCargas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [periodo, setPeriodo] = useState('mes'); // 'semana' | 'mes' | 'tudo'
+  const [busca, setBusca] = useState('');
+  const [selecionada, setSelecionada] = useState(null);
 
   useEffect(() => {
     setLoading(true);
@@ -580,24 +662,40 @@ function HistoricoProgramador({ profile }) {
     { key: 'tudo', label: 'Tudo' },
   ];
 
+  const buscaNormalizada = busca.trim().toLowerCase();
+  const cargasFiltradas = buscaNormalizada
+    ? cargas.filter((c) =>
+        c.route_number.toLowerCase().includes(buscaNormalizada) ||
+        c.driver_name.toLowerCase().includes(buscaNormalizada) ||
+        (c.passador?.full_name ?? '').toLowerCase().includes(buscaNormalizada)
+      )
+    : cargas;
+
   return (
     <div>
       <p className="font-mono text-xs tracking-widest text-accent">HISTÓRICO</p>
       <h1 className="font-display text-4xl text-asphalt">Cargas Processadas</h1>
 
-      <div className="mt-4 flex gap-2">
-        {filtros.map((f) => (
-          <button key={f.key} onClick={() => setPeriodo(f.key)}
-            className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
-              periodo === f.key ? 'bg-asphalt text-white' : 'bg-white text-steel border border-border hover:border-asphalt/30'
-            }`}>
-            {f.label}
-          </button>
-        ))}
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <div className="flex gap-2">
+          {filtros.map((f) => (
+            <button key={f.key} onClick={() => setPeriodo(f.key)}
+              className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
+                periodo === f.key ? 'bg-asphalt text-white' : 'bg-white text-steel border border-border hover:border-asphalt/30'
+              }`}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <input
+          type="text" placeholder="Buscar por rota, motorista ou passador…"
+          value={busca} onChange={(e) => setBusca(e.target.value)}
+          className="ml-auto w-72 rounded-lg border border-border bg-white px-3 py-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+        />
       </div>
 
-      {loading ? <Spinner /> : cargas.length === 0 ? (
-        <div className="mt-6"><EmptyState title="Nada por aqui" hint="Nenhuma carga concluída nesse período." /></div>
+      {loading ? <Spinner /> : cargasFiltradas.length === 0 ? (
+        <div className="mt-6"><EmptyState title="Nada por aqui" hint={busca ? 'Nenhum resultado pra essa busca.' : 'Nenhuma carga concluída nesse período.'} /></div>
       ) : (
         <div className="mt-6 overflow-hidden rounded-xl border border-border bg-white">
           <table className="w-full text-sm">
@@ -610,8 +708,12 @@ function HistoricoProgramador({ profile }) {
               </tr>
             </thead>
             <tbody>
-              {cargas.map((c) => (
-                <tr key={c.id} className="border-t border-border">
+              {cargasFiltradas.map((c) => (
+                <tr
+                  key={c.id}
+                  onClick={() => setSelecionada({ ...c, programador: { full_name: profile.full_name } })}
+                  className="cursor-pointer border-t border-border hover:bg-paper"
+                >
                   <td className="px-4 py-3 font-mono font-medium text-asphalt">{c.route_number}</td>
                   <td className="px-4 py-3">{c.driver_name}</td>
                   <td className="px-4 py-3">{c.passador?.full_name ?? '—'}</td>
@@ -622,6 +724,136 @@ function HistoricoProgramador({ profile }) {
           </table>
         </div>
       )}
+
+      <CargaDetailModal carga={selecionada} onClose={() => setSelecionada(null)} />
+    </div>
+  );
+}
+
+/* ============================================================================
+   E. RELATÓRIO (Admin) — cargas por período, com busca e detalhes
+============================================================================ */
+
+function RelatorioAdmin() {
+  const [dateFrom, setDateFrom] = useState(todayISODate());
+  const [dateTo, setDateTo] = useState(todayISODate());
+  const [cargas, setCargas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busca, setBusca] = useState('');
+  const [selecionada, setSelecionada] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('cargas')
+      .select('*, passador:passador_id(full_name), programador:programador_id(full_name)')
+      .gte('load_date', dateFrom)
+      .lte('load_date', dateTo)
+      .order('load_date', { ascending: false })
+      .order('created_at', { ascending: false });
+    setCargas(data || []);
+    setLoading(false);
+  }, [dateFrom, dateTo]);
+
+  useEffect(() => { load(); }, [load]);
+
+  function irParaHoje() {
+    setDateFrom(todayISODate());
+    setDateTo(todayISODate());
+  }
+
+  const buscaNormalizada = busca.trim().toLowerCase();
+  const cargasFiltradas = buscaNormalizada
+    ? cargas.filter((c) =>
+        c.route_number.toLowerCase().includes(buscaNormalizada) ||
+        c.driver_name.toLowerCase().includes(buscaNormalizada) ||
+        (c.passador?.full_name ?? '').toLowerCase().includes(buscaNormalizada) ||
+        (c.programador?.full_name ?? '').toLowerCase().includes(buscaNormalizada)
+      )
+    : cargas;
+
+  const totalConcluidas = cargasFiltradas.filter((c) => c.status === 'concluida').length;
+  const totalPendentes = cargasFiltradas.filter((c) => c.status === 'pendente').length;
+
+  const inputClass = 'rounded-lg border border-border bg-white px-3 py-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20';
+
+  return (
+    <div>
+      <p className="font-mono text-xs tracking-widest text-accent">RELATÓRIO</p>
+      <h1 className="font-display text-4xl text-asphalt">Cargas por Período</h1>
+      <p className="mt-1 text-steel">Abre sempre no dia de hoje — ajuste o período abaixo pra ver outras datas.</p>
+
+      <div className="mt-4 flex flex-wrap items-end gap-3">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-steel">De</label>
+          <input type="date" className={inputClass} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-steel">Até</label>
+          <input type="date" className={inputClass} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        </div>
+        <button onClick={irParaHoje}
+          className="rounded-lg border border-border bg-white px-3 py-2 text-sm font-medium text-asphalt hover:border-asphalt/30">
+          Hoje
+        </button>
+        <input
+          type="text" placeholder="Buscar por rota, motorista, passador ou programador…"
+          value={busca} onChange={(e) => setBusca(e.target.value)}
+          className={`${inputClass} ml-auto w-80`}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-3 gap-4">
+        <div className="rounded-xl border border-border bg-white p-4">
+          <p className="text-xs uppercase tracking-wide text-steel">Total no período</p>
+          <p className="font-display text-3xl text-asphalt">{cargasFiltradas.length}</p>
+        </div>
+        <div className="rounded-xl border border-border bg-white p-4">
+          <p className="text-xs uppercase tracking-wide text-steel">Concluídas</p>
+          <p className="font-display text-3xl text-success">{totalConcluidas}</p>
+        </div>
+        <div className="rounded-xl border border-border bg-white p-4">
+          <p className="text-xs uppercase tracking-wide text-steel">Pendentes</p>
+          <p className="font-display text-3xl text-pending">{totalPendentes}</p>
+        </div>
+      </div>
+
+      {loading ? <Spinner /> : cargasFiltradas.length === 0 ? (
+        <div className="mt-6"><EmptyState title="Nenhuma carga encontrada" hint="Tente ajustar o período ou a busca." /></div>
+      ) : (
+        <div className="mt-6 overflow-hidden rounded-xl border border-border bg-white">
+          <table className="w-full text-sm">
+            <thead className="bg-paper text-left text-xs uppercase tracking-wide text-steel">
+              <tr>
+                <th className="px-4 py-3">Rota</th>
+                <th className="px-4 py-3">Motorista</th>
+                <th className="px-4 py-3">Carregamento</th>
+                <th className="px-4 py-3">Passador</th>
+                <th className="px-4 py-3">Programador</th>
+                <th className="px-4 py-3">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cargasFiltradas.map((c) => (
+                <tr
+                  key={c.id}
+                  onClick={() => setSelecionada(c)}
+                  className="cursor-pointer border-t border-border hover:bg-paper"
+                >
+                  <td className="px-4 py-3 font-mono font-medium text-asphalt">{c.route_number}</td>
+                  <td className="px-4 py-3">{c.driver_name}</td>
+                  <td className="px-4 py-3">{formatDate(c.load_date)}</td>
+                  <td className="px-4 py-3">{c.passador?.full_name ?? '—'}</td>
+                  <td className="px-4 py-3">{c.programador?.full_name ?? '—'}</td>
+                  <td className="px-4 py-3"><StatusBadge status={c.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <CargaDetailModal carga={selecionada} onClose={() => setSelecionada(null)} />
     </div>
   );
 }
@@ -834,13 +1066,16 @@ const TABS_BY_ROLE = {
   passador: [
     { key: 'repasse', label: 'Repasse de Carga' },
     { key: 'acompanhamento', label: 'Acompanhamento' },
+    { key: 'relatorio', label: 'Relatório' },
   ],
   programador: [
     { key: 'fila', label: 'Fila de Trabalho' },
     { key: 'historico', label: 'Histórico' },
+    { key: 'relatorio', label: 'Relatório' },
   ],
   admin: [
     { key: 'equipe', label: 'Equipe' },
+    { key: 'relatorio', label: 'Relatório' },
   ],
 };
 
@@ -877,6 +1112,7 @@ export default function App() {
       {profile.role === 'programador' && activeTab === 'fila' && <FilaTrabalho profile={profile} />}
       {profile.role === 'programador' && activeTab === 'historico' && <HistoricoProgramador profile={profile} />}
       {profile.role === 'admin' && activeTab === 'equipe' && <AdminPainel />}
+      {activeTab === 'relatorio' && <RelatorioAdmin />}
     </Layout>
   );
 }
